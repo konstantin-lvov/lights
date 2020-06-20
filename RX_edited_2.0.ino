@@ -5,16 +5,23 @@
 #define ph_resistor_pin A6
 #define battery_volt_pin A3
 #define rele_pin 2
+#define movement_sensor A0
 
 RF24 radio(9, 10); // "создать" модуль на пинах 9 и 10 Для Уно
 
+const byte TABLE_LIGHTS_MOSFET = 3;
+const byte KITCHEN_LIGHTS_MOSFET = 5;
+const byte HALL_LIGHTS_MOSFET = 6;
 const byte STEP = 1;
 const byte MAX_LIGHT = 255;
 const byte MIDDLE_LIGHT = 150;
 const byte LOW_LIGHT = 15;
 const byte LOWER_LIMIT = 0;
-const byte COEF_TO_DIVISION = 20; // 500/30 коэффициент для перевода половины аналоговой шкалы в 30%
-const int TIME_FOR_ON_OR_OFF = 500; //millisec
+const int MOVEMENT_TRGGER = 500; // trashhold for action
+const byte MOVEMENT_NIGH_LIMIT = 5; // light level if night
+const byte MOVEMENT_BRIGHT_TRIGGER = 20;
+const long TIME_FOR_MOVE = 3e5;
+const int TIME_FOR_ON_OR_OFF = 1000; //millisec
 const float MIN_BAT_VOLTAGE = 3.5;
 const float MAX_BAT_VOLTAGE = 4.15;
 const float COEF = 1;
@@ -22,11 +29,14 @@ const float COEF = 1;
 bool lightIsOn = false;
 bool powerIsOn = false;
 bool isCharging = false;
+bool lightsByMove = false;
+bool onByMovementSensor = false;
+bool nightLightsOn = false;
 
 byte current_light_levels[3] = {LOWER_LIMIT, LOWER_LIMIT, LOWER_LIMIT}; //текущие уровни освещения
 
 byte address[][6] = {"1Node", "2Node", "3Node", "4Node", "5Node", "6Node"}; //возможные номера труб
-byte mosfets[3] = {3, 5, 6}; // номера пинов для управления мосфетами
+byte mosfets[3] = {TABLE_LIGHTS_MOSFET, KITCHEN_LIGHTS_MOSFET, HALL_LIGHTS_MOSFET}; // номера пинов для управления мосфетами
 byte delay_for_changing_lights = 3;
 byte pipeNo, gotByte, oldMaxLightLevel = 0, calculatedMaxLightLevel;
 
@@ -37,6 +47,8 @@ float battery_voltage = 0;
 double maxLightLevel = 0;
 
 long millisOnStart;
+unsigned long lastMoveTime;
+unsigned long currentTime;
 
 void setup() {
   // Пины D5 и D6 - 7.8 кГц
@@ -81,8 +93,19 @@ void loop() {
     radio.read( &gotByte, sizeof(gotByte) );         // чиатем входящий сигнал
   }
 
+  currentTime = millis();
 
-  if (millis() - millisOnStart > 1000) { // раз в секунду проверяем несколько доп условий
+  if (onByMovementSensor) {
+    if (analogRead(movement_sensor) > MOVEMENT_TRGGER) {
+      lastMoveTime  = millis();
+    }
+    if (currentTime - lastMoveTime > TIME_FOR_MOVE) {
+      lightsOff();
+      onByMovementSensor = false;
+    }
+  }
+
+  if (currentTime - millisOnStart > 1000) { // раз в секунду проверяем несколько доп условий
 
     // коррректируем яркость по фоторезистору
     photo_resistor = analogRead(ph_resistor_pin);
@@ -107,10 +130,19 @@ void loop() {
       applyCommand(gotByte);
       gotByte = 0;
     }
-    delay(200);
+    delay(100);
+
     postAdjustment();
 
+    if (!lightIsOn) {
+      if (analogRead(movement_sensor) > MOVEMENT_TRGGER) {
+        movementSensorHendler();
+      }
+    }
+
+
     millisOnStart = millis();
+
     Serial.print("Charging: "); Serial.println(isCharging);
     Serial.println("-----------------------------");
 
@@ -119,12 +151,6 @@ void loop() {
 
 }
 
-/*
-   В зависимости от входного параметра
-   1 - установить максимальный уровень на 100% и включить всё освещение или выключить все если включено
-   2 - установить максимальный уровень на 60% и включить всё освещение или выключить все если включено
-   3 - установить максимальный уровень на 30% и включить всё освещение или выключить все если включено
-*/
 void applyCommand(byte lightningOptions) {
   if (lightningOptions > 0 && lightningOptions < 4) {
     maxLightLevel = 0.004 * pow((photo_resistor * COEF), 2); //0 - 150 = 150
@@ -142,9 +168,6 @@ void applyCommand(byte lightningOptions) {
   }
 }
 
-/*
-   Меняем уровень освещенности в соответствии с выставленными настройками
-*/
 void lightsOn() {
   Serial.println("lights on!");
   Serial.print("max light level: "); Serial.println(maxLightLevel);
@@ -152,17 +175,27 @@ void lightsOn() {
   Serial.print("delay_for_changing_lights: ");
   Serial.println(delay_for_changing_lights);
   digitalWrite(rele_pin, LOW);
-  delay(500);
-  while (current_light_levels[2] < maxLightLevel) {
+  /*
+     Пока свет не включится, включаем на всех потребителях
+  */
+  while (!lightIsOn) {
     for (byte x = 0; x < sizeof(mosfets); x++) {
-      current_light_levels[x] += STEP;
-      analogWrite(mosfets[x], current_light_levels[x]);
+      if (current_light_levels[x] < maxLightLevel) {
+        current_light_levels[x] += STEP;
+        analogWrite(mosfets[x], current_light_levels[x]);
+      }
+      /*
+               Если уровень яркости всех потребителей на максимуме значит свет включен
+      */
+      if (current_light_levels[TABLE_LIGHTS_MOSFET] == maxLightLevel &&
+          current_light_levels[KITCHEN_LIGHTS_MOSFET] == maxLightLevel &&
+          current_light_levels[HALL_LIGHTS_MOSFET] == maxLightLevel) {
+        lightIsOn = true;
+      }
       delay(delay_for_changing_lights);
     }
   }
   oldMaxLightLevel - maxLightLevel;
-  lightIsOn = true;
-  delay(1000);
 }
 
 void lightsOff() {
@@ -171,17 +204,32 @@ void lightsOff() {
   delay_for_changing_lights = TIME_FOR_ON_OR_OFF / maxLightLevel;
   Serial.print("delay_for_changing_lights: ");
   Serial.println(delay_for_changing_lights);
-  while (current_light_levels[2] > LOWER_LIMIT) {
-  for (byte x = 0; x < sizeof(mosfets); x++) {
-      current_light_levels[x] -= STEP;
-      analogWrite(mosfets[x], current_light_levels[x]);
+  /*
+     Пока свет не выключится, гасим его на всех потребителях
+  */
+  while (lightIsOn) {
+    for (byte x = 0; x < sizeof(mosfets); x++) {
+      if (current_light_levels[x] > LOWER_LIMIT) {
+        current_light_levels[x] -= STEP;
+        analogWrite(mosfets[x], current_light_levels[x]);
+      }
+      /*
+         Если уровень яркости всех потребителей на минимальном значении значит свет выключен
+      */
+      if (current_light_levels[TABLE_LIGHTS_MOSFET] == LOWER_LIMIT &&
+          current_light_levels[KITCHEN_LIGHTS_MOSFET] == LOWER_LIMIT &&
+          current_light_levels[HALL_LIGHTS_MOSFET] == LOWER_LIMIT) {
+        lightIsOn = false;
+      }
       delay(delay_for_changing_lights);
     }
   }
-  if (!isCharging) { //если батарея сейчас не заряжается то можно выключить
+  /*
+     Если батарея сейчас не заряжается то можно выключить
+  */
+  if (!isCharging) {
     digitalWrite(rele_pin, HIGH);
   }
-  lightIsOn = false;
   delay(1000);
 }
 
@@ -229,4 +277,24 @@ void postAdjustment() {
     }
   }
 
+}
+
+void movementSensorHendler () {
+  if (photo_resistor < MOVEMENT_BRIGHT_TRIGGER) {
+    analogWrite(TABLE_LIGHTS_MOSFET, 0);
+    analogWrite(KITCHEN_LIGHTS_MOSFET, 0);
+    analogWrite(HALL_LIGHTS_MOSFET, 0);
+    delay_for_changing_lights = TIME_FOR_ON_OR_OFF / MOVEMENT_NIGH_LIMIT;
+    digitalWrite(rele_pin, LOW);
+    while (current_light_levels[HALL_LIGHTS_MOSFET] < MOVEMENT_NIGH_LIMIT) {
+      current_light_levels[HALL_LIGHTS_MOSFET] += STEP;
+      analogWrite(mosfets[HALL_LIGHTS_MOSFET], current_light_levels[HALL_LIGHTS_MOSFET]);
+      delay(delay_for_changing_lights);
+    }
+    lightIsOn = true;
+    nightLightsOn = true;
+  } else {
+    lightsOn();
+  }
+  onByMovementSensor = true;
 }
