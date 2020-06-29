@@ -15,13 +15,13 @@ const byte HALL_LIGHTS_MOSFET = 6;
 const byte STEP = 1;
 const byte MAX_LIGHT = 255;
 const byte MIDDLE_LIGHT = 150;
-const byte LOW_LIGHT = 15;
+const byte LOW_LIGHT = 30;
 const byte LOWER_LIMIT = 0;
 const int MOVEMENT_TRGGER = 500; // trashhold for action
-const byte MOVEMENT_NIGH_LIMIT = 5; // light level if night
-const byte MOVEMENT_BRIGHT_TRIGGER = 20;
+const byte MOVEMENT_NIGH_LIMIT = 3; // light level if night
+const byte MOVEMENT_BRIGHT_TRIGGER = 4;
 long TIME_FOR_MOVE = 3e5;
-const int TIME_FOR_ON_OR_OFF = 500; //millisec
+const int TIME_FOR_ON_OR_OFF = 600; //millisec
 
 const float MIN_BAT_VOLTAGE = 3.5;
 const float MAX_BAT_VOLTAGE = 4.15;
@@ -102,8 +102,6 @@ void loop() {
 
   if (onByMovementSensor) {
     if (analogRead(movement_sensor) > MOVEMENT_TRGGER) {
-      Serial.print("MOVEMENT SENSOR VALUE: ");
-      Serial.println(movement_sensor);
       lastMoveTime  = millis();
       while (!dedTime) {
         dedTime = true;
@@ -116,11 +114,6 @@ void loop() {
       }
       dedTime = false;
     }
-    Serial.print("lastMoveTime: ");
-    Serial.println(lastMoveTime);
-    Serial.print("currentTime: ");
-    Serial.println(currentTime);
-    Serial.println(lastMoveTime - currentTime);
     if (nightLightsOn) {
       TIME_FOR_MOVE = 3e5;
     } else {
@@ -284,8 +277,9 @@ void lightsOff() {
   if (!isCharging) {
     digitalWrite(rele_pin, HIGH);
   }
-  
+
   onByMovementSensor = false;
+  nightLightsOn = false;
 }
 
 void postAdjustment() {
@@ -343,9 +337,20 @@ void movementSensorHendler () {
     delay_for_changing_lights = TIME_FOR_ON_OR_OFF / MOVEMENT_NIGH_LIMIT;
     digitalWrite(rele_pin, LOW);
     while (current_light_levels[2] < MOVEMENT_NIGH_LIMIT) {
-      current_light_levels[2] += STEP;
-      analogWrite(HALL_LIGHTS_MOSFET, current_light_levels[2]);
-      delay(delay_for_changing_lights);
+      for (byte x = 0; x < sizeof(mosfets); x++) {
+        if (x == 1 && current_light_levels[x] > 1) {
+          continue;
+        }
+        if (x == 0) {
+          continue;
+        }
+          current_light_levels[x] += STEP;
+          analogWrite(mosfets[x], current_light_levels[x]);
+          delay(delay_for_changing_lights);
+
+        
+      }
+
     }
     lightIsOn = true;
     nightLightsOn = true;
