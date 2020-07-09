@@ -15,12 +15,12 @@ const byte HALL_LIGHTS_MOSFET = 6;
 const byte STEP = 1;
 const byte MAX_LIGHT = 255;
 const byte MIDDLE_LIGHT = 150;
-const byte LOW_LIGHT = 30;
+const byte LOW_LIGHT = 50;
 const byte LOWER_LIMIT = 0;
 const int MOVEMENT_TRGGER = 500; // trashhold for action
 const byte MOVEMENT_NIGH_LIMIT = 3; // light level if night
 const byte MOVEMENT_BRIGHT_TRIGGER = 4;
-long TIME_FOR_MOVE = 3e5;
+long TIME_FOR_MOVE = 6e5;
 const int TIME_FOR_ON_OR_OFF = 600; //millisec
 
 const float MIN_BAT_VOLTAGE = 3.5;
@@ -114,10 +114,8 @@ void loop() {
       }
       dedTime = false;
     }
-    if (nightLightsOn) {
-      TIME_FOR_MOVE = 3e5;
-    } else {
-      TIME_FOR_MOVE = 3e5 * MULTIPLIER;
+    if (!nightLightsOn) {
+      TIME_FOR_MOVE = 6e5 * MULTIPLIER;
     }
     if (currentTime > lastMoveTime &&
         currentTime - lastMoveTime > TIME_FOR_MOVE) {
