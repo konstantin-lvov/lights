@@ -16,16 +16,25 @@ const byte TABLE_LIGHTS_MOSFET = 3;
 const byte KITCHEN_LIGHTS_MOSFET = 5;
 const byte HALL_LIGHTS_MOSFET = 6;
 
-const byte STEP = 1;
 const byte MAX_LIGHT = 255;
 const byte MIDDLE_LIGHT = 180;
 const byte LOW_LIGHT = 100;
+const byte TWILIGHT = 4;
 const byte LOWER_LIMIT = 0;
+
+const int DAY_LIGHT_TRESHOLD = 800; //parrots from photo resistor
+const int EVENING_LIGHT_TRESHOLD = 400; //parrots from photo resistor
+const int TWILIGHT_TRESHOLD = 2; //parrots from photo resistor
+
+
 const int MOVEMENT_TRGGER = 500; // trashhold for action
+
+
+const byte STEP = 1;
 const byte MOVEMENT_NIGH_LIMIT = 4; // light level if night
 const byte MOVEMENT_BRIGHT_TRIGGER = 2;
 long TIME_FOR_MOVE = 3e5;
-const int TIME_FOR_ON_OR_OFF = 600; //millisec
+//const int TIME_FOR_ON_OR_OFF = 600; //millisec
 
 const float MIN_BAT_VOLTAGE = 3.5;
 const float MAX_BAT_VOLTAGE = 4.15;
@@ -48,9 +57,9 @@ byte current_light_levels[] = {LOWER_LIMIT, LOWER_LIMIT, LOWER_LIMIT}; //тек�
 
 byte address[][6] = {"1Node", "2Node", "3Node", "4Node", "5Node", "6Node"}; //возможные номера труб
 byte mosfets[3] = {TABLE_LIGHTS_MOSFET, KITCHEN_LIGHTS_MOSFET, HALL_LIGHTS_MOSFET}; // номера пинов для управления мосфетами
-int delay_for_changing_lights = 3;
 byte pipeNo, gotByte, oldMaxLightLevel = 0, calculatedMaxLightLevel;
 
+int delay_for_changing_lights = 10;
 int photo_resistor = 0;
 int counter = 0;
 
@@ -98,11 +107,17 @@ void setup() {
   }
   millisOnStart = millis();
 
-
+//  Serial.begin(9600);
+  photo_resistor = analogRead(ph_resistor_pin);
+  Serial.print("photo resistor: "); Serial.println(photo_resistor);
+  define_max_light_level();
+  Serial.print("maxlightlevel: "); Serial.println(maxLightLevel);
+  allLightsAction = true;
+  lightsOn(false);
+  allLightsAction = false;
 }
 
 void loop() {
-
   while (radio.available(&pipeNo)) {  // слушаем эфир со всех труб
     radio.read( &gotByte, sizeof(gotByte) );         // чиатем входящий сигнал
   }
@@ -148,20 +163,14 @@ void loop() {
   //    }
   //  }
 
-  if (currentTime - millisOnStart > 1000) { // раз в секунду проверяем несколько доп условий
+  if (currentTime - millisOnStart > 8000) { // раз в секунду проверяем несколько доп условий
 
     // читаем яркость с фоторезистора
     photo_resistor = analogRead(ph_resistor_pin);
     Serial.print("photo resistor: "); Serial.println(photo_resistor);
 
-    maxLightLevel = 0.004 * pow((photo_resistor * COEF), 2); //0 - 150 = 150
+    define_max_light_level();
     Serial.print("maxlightlevel: "); Serial.println(maxLightLevel);
-    if (maxLightLevel < LOW_LIGHT) {
-      maxLightLevel = LOW_LIGHT;
-    }
-    if (maxLightLevel > 250) {
-      maxLightLevel = 250;
-    }
 
     // снимаем показания с батареи
     battery_voltage = (float)analogRead(battery_volt_pin) / 1023 * 5.0;
@@ -181,14 +190,17 @@ void loop() {
       case 1:
         Serial.print("Recieved: "); Serial.println(gotByte);
         f_allLightsAction();
+        gotByte = 0;
         break;
       case 2:
         Serial.print("Recieved: "); Serial.println(gotByte);
         f_kitchenLightsAction();
+        gotByte = 0;
         break;
       case 3:
         Serial.print("Recieved: "); Serial.println(gotByte);
         f_tableLightsAction();
+        gotByte = 0;
         break;
     }
     delay(50);
@@ -214,45 +226,68 @@ void loop() {
 }
 
 void f_allLightsAction() {
+
+  if (kitchenLightsAction || tableLightsAction) {
+    lightsOff(true);
+  }
+
   allLightsAction = true;
   tableLightsAction = false;
   kitchenLightsAction = false;
 
-  if (lightIsOn) {
-    lightsOn();
+  if (!lightIsOn) {
+    Serial.println("lets lights on");
+    lightsOn(false);
   } else {
-    lightsOff();
+    Serial.println("lets lights off");
+    lightsOff(false);
   }
 }
 
 void f_tableLightsAction() {
+
+  if (kitchenLightsAction || allLightsAction) {
+    lightsOff(true);
+  }
+
   allLightsAction = false;
   tableLightsAction = true;
   kitchenLightsAction = false;
 
-  if (lightIsOn) {
-    lightsOn();
+  if (!lightIsOn) {
+    lightsOn(false);
   } else {
-    lightsOff();
+    lightsOff(false);
   }
 }
 
 void f_kitchenLightsAction() {
+
+  if (tableLightsAction || allLightsAction) {
+    lightsOff(true);
+  }
+
   allLightsAction = false;
   tableLightsAction = false;
   kitchenLightsAction = true;
 
-  if (lightIsOn) {
-    lightsOn();
+  if (!lightIsOn) {
+    lightsOn(false);
   } else {
-    lightsOff();
+    lightsOff(false);
   }
 }
 
-void lightsOn() {
+//###################
+//#                 #
+//# ВКЛЮЧЕНИЕ СВЕТА #
+//#                 #
+//###################
+
+void lightsOn(bool byAnotherCall) {
   Serial.println("lights on!");
   Serial.print("max light level: "); Serial.println(maxLightLevel);
-  delay_for_changing_lights = (TIME_FOR_ON_OR_OFF / maxLightLevel) * MULTIPLIER;
+  delay_for_changing_lights = delay_for_changing_lights; // * MULTIPLIER;
   Serial.print("delay_for_changing_lights: ");
   Serial.println(delay_for_changing_lights);
   calculatedMaxLightLevel = maxLightLevel;
@@ -339,10 +374,16 @@ void lightsOn() {
   oldMaxLightLevel = calculatedMaxLightLevel;
 }
 
-void lightsOff() {
+//####################
+//#                  #
+//# ВЫКЛЮЧЕНИЕ СВЕТА #
+//#                  #
+//####################
+
+void lightsOff(bool byAnotherCall) {
   Serial.println("lights off!");
   Serial.print("max light level: "); Serial.println(maxLightLevel);
-  delay_for_changing_lights = (TIME_FOR_ON_OR_OFF / maxLightLevel) * MULTIPLIER;
+  delay_for_changing_lights = delay_for_changing_lights;// * MULTIPLIER;
   Serial.print("delay_for_changing_lights: ");
   Serial.println(delay_for_changing_lights);
   calculatedMaxLightLevel = maxLightLevel;
@@ -352,22 +393,24 @@ void lightsOff() {
   while (lightIsOn) {
     if (allLightsAction) {
       for (byte x = 0; x < sizeof(mosfets); x++) {
-        if (current_light_levels[x] < calculatedMaxLightLevel) {
+        if (current_light_levels[x] > LOWER_LIMIT) {
           current_light_levels[x] -= STEP;
+          Serial.print("decrease all lights levels to:");
+          Serial.println(current_light_levels[x]);
           analogWrite(mosfets[x], current_light_levels[x]);
         }
       }
     }
 
     if (tableLightsAction) {
-      if (current_light_levels[0] < calculatedMaxLightLevel) {
+      if (current_light_levels[0] > LOWER_LIMIT) {
         current_light_levels[0] -= STEP;
         analogWrite(mosfets[0], current_light_levels[0]);
       }
     }
 
     if (kitchenLightsAction) {
-      if (current_light_levels[1] < calculatedMaxLightLevel) {
+      if (current_light_levels[1] > LOWER_LIMIT) {
         current_light_levels[1] -= STEP;
         analogWrite(mosfets[1], current_light_levels[1]);
       }
@@ -429,7 +472,7 @@ void lightsOff() {
   /*
      Если батарея сейчас не заряжается то можно выключить
   */
-  if (!isCharging) {
+  if (!isCharging || !byAnotherCall) {
     digitalWrite(rele_pin, HIGH);
   }
 
@@ -437,7 +480,14 @@ void lightsOff() {
   nightLightsOn = false;
 }
 
+//#######################
+//#                     #
+//# КОРРЕКТИРОВКА СВЕТА #
+//#                     #
+//#######################
+
 void postAdjustment() {
+  delay_for_changing_lights = delay_for_changing_lights;// * MULTIPLIER;
   if (lightIsOn && !nightLightsOn) {
 
     maxLightLevel = 0.004 * pow((photo_resistor * COEF), 2);
@@ -521,47 +571,28 @@ void postAdjustment() {
 
 }
 
-//void movementSensorHendler () {
-//  if (photo_resistor < MOVEMENT_BRIGHT_TRIGGER) {
-//    Serial.print("HALL LIGHT ON!");
-//    analogWrite(TABLE_LIGHTS_MOSFET, 0);
-//    analogWrite(KITCHEN_LIGHTS_MOSFET, 0);
-//    analogWrite(HALL_LIGHTS_MOSFET, 0);
-//    delay_for_changing_lights = TIME_FOR_ON_OR_OFF / MOVEMENT_NIGH_LIMIT;
-//    digitalWrite(rele_pin, LOW);
-//    while (current_light_levels[2] < MOVEMENT_NIGH_LIMIT) {
-//      for (byte x = 0; x < sizeof(mosfets); x++) {
-//        if (x == 1 && current_light_levels[x] > 1) {
-//          continue;
-//        }
-//        if (x == 0) {
-//          continue;
-//        }
-//          current_light_levels[x] += STEP;
-//          analogWrite(mosfets[x], current_light_levels[x]);
-//          delay(delay_for_changing_lights);
-//
-//
-//      }
-//
-//    }
-//    lightIsOn = true;
-//    nightLightsOn = true;
-//  } else {
-//    Serial.println("ALL LIGHTS ON BY MOVEMENT");
-//    lightsOn();
-//  }
-//
-//  lastMoveTime = millis();
-//  onByMovementSensor = true;
-//  while (!dedTime) {
-//    dedTime = true;
-//    for (int x = 0; x < 50; x++) {
-//      if (analogRead(movement_sensor) > MOVEMENT_TRGGER) {
-//        dedTime = false;
-//      }
-//      delay(2);
-//    }
-//  }
-//  dedTime = false;
-//}
+//const byte MAX_LIGHT = 255;
+//const byte MIDDLE_LIGHT = 180;
+//const byte LOW_LIGHT = 100;
+//const byte TWILIGHT = 4;
+//const byte LOWER_LIMIT = 0;
+
+//const int DAY_LIGHT_TRESHOLD = 800; //parrots from photo resistor
+//const int EVENING_LIGHT_TRESHOLD = 400; //parrots from photo resistor
+//const int TWILIGHT_TRESHOLD = 2; //parrots from photo resistor
+void define_max_light_level() {
+  if (photo_resistor  <= TWILIGHT_TRESHOLD) {
+    maxLightLevel = TWILIGHT;
+  }
+  if (photo_resistor > TWILIGHT_TRESHOLD) {
+    maxLightLevel = LOW_LIGHT;
+  }
+  if (photo_resistor > EVENING_LIGHT_TRESHOLD) {
+    maxLightLevel = MIDDLE_LIGHT;
+  }
+  if (photo_resistor > DAY_LIGHT_TRESHOLD) {
+    maxLightLevel = MAX_LIGHT;
+  }
+
+
+}
